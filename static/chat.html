@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Teacher - Chat</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes bounce-dot {
+            0%, 80%, 100% { transform: translateY(0); }
+            40% { transform: translateY(-6px); }
+        }
+        .dot-1 { animation: bounce-dot 1.4s infinite 0ms; }
+        .dot-2 { animation: bounce-dot 1.4s infinite 150ms; }
+        .dot-3 { animation: bounce-dot 1.4s infinite 300ms; }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div class="h-screen flex flex-col">
+        <!-- Header -->
+        <header class="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between shrink-0">
+            <div class="flex items-center gap-3">
+                <a href="/" class="text-gray-500 hover:text-gray-700 transition-colors">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+                    </svg>
+                </a>
+                <h1 class="text-lg font-semibold text-gray-900">AI Teacher</h1>
+                <span id="topic-badge" class="text-sm text-gray-500 hidden sm:inline"></span>
+            </div>
+        </header>
+
+        <!-- Error banner -->
+        <div id="error-banner" class="bg-red-50 border-b border-red-200 px-4 py-2 text-sm text-red-700 hidden shrink-0"></div>
+
+        <!-- Chat messages -->
+        <div id="messages" class="flex-1 overflow-y-auto p-4 space-y-2">
+            <div id="empty-state" class="flex items-center justify-center h-full text-gray-400">
+                <p>Your conversation will appear here...</p>
+            </div>
+        </div>
+
+        <!-- Input area -->
+        <div class="border-t border-gray-200 bg-white p-4 shrink-0">
+            <form id="chat-form" class="flex items-end gap-2">
+                <div class="flex items-center gap-1">
+                    <!-- Voice button -->
+                    <button type="button" id="voice-btn"
+                        class="p-2 rounded-full transition-colors text-gray-400 hover:text-gray-600 hover:bg-gray-100 hidden"
+                        title="Start voice input">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                        </svg>
+                    </button>
+                    <!-- TTS toggle -->
+                    <button type="button" id="tts-btn"
+                        class="p-2 rounded-full transition-colors text-gray-400 hover:text-gray-600 hover:bg-gray-100 hidden"
+                        title="Enable auto-read responses">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path id="tts-icon-path" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+                        </svg>
+                    </button>
+                    <!-- TTS stop -->
+                    <button type="button" id="tts-stop-btn"
+                        class="p-2 rounded-full text-red-500 hover:bg-red-50 transition-colors hidden"
+                        title="Stop speaking">
+                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                            <rect x="6" y="6" width="12" height="12" rx="1" />
+                        </svg>
+                    </button>
+                </div>
+
+                <input type="text" id="chat-input" placeholder="Type your message..."
+                    class="flex-1 px-4 py-2 border border-gray-300 rounded-full focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 text-gray-900 placeholder-gray-400" />
+
+                <button type="submit" id="send-btn" disabled
+                    class="px-4 py-2 bg-blue-600 text-white rounded-full hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">
+                    Send
+                </button>
+                <button type="button" id="stop-btn"
+                    class="px-4 py-2 bg-red-500 text-white rounded-full hover:bg-red-600 transition-colors hidden">
+                    Stop
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // ── State ──
+        let messages = [];
+        let isStreaming = false;
+        let sourceText = null;
+        let topic = null;
+        let abortController = null;
+        let isListening = false;
+        let autoSpeak = false;
+        let recognition = null;
+
+        // ── DOM refs ──
+        const messagesEl = document.getElementById('messages');
+        const emptyState = document.getElementById('empty-state');
+        const errorBanner = document.getElementById('error-banner');
+        const chatForm = document.getElementById('chat-form');
+        const chatInput = document.getElementById('chat-input');
+        const sendBtn = document.getElementById('send-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const voiceBtn = document.getElementById('voice-btn');
+        const ttsBtn = document.getElementById('tts-btn');
+        const ttsStopBtn = document.getElementById('tts-stop-btn');
+        const ttsIconPath = document.getElementById('tts-icon-path');
+        const topicBadge = document.getElementById('topic-badge');
+
+        // ── Render ──
+        function renderMessages() {
+            messagesEl.querySelectorAll('.chat-msg, .typing-dots').forEach(el => el.remove());
+
+            if (messages.length === 0) {
+                emptyState.classList.remove('hidden');
+                return;
+            }
+            emptyState.classList.add('hidden');
+
+            for (const msg of messages) {
+                const wrapper = document.createElement('div');
+                wrapper.className = `chat-msg flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} mb-4`;
+
+                const bubble = document.createElement('div');
+                if (msg.role === 'user') {
+                    bubble.className = 'max-w-[80%] rounded-2xl px-4 py-3 bg-blue-600 text-white rounded-br-md';
+                } else {
+                    bubble.className = 'max-w-[80%] rounded-2xl px-4 py-3 bg-white border border-gray-200 text-gray-900 rounded-bl-md';
+                    const label = document.createElement('div');
+                    label.className = 'text-xs font-medium text-blue-600 mb-1';
+                    label.textContent = 'AI Teacher';
+                    bubble.appendChild(label);
+                }
+
+                const content = document.createElement('div');
+                content.className = 'whitespace-pre-wrap text-sm leading-relaxed';
+                content.textContent = msg.content;
+                bubble.appendChild(content);
+                wrapper.appendChild(bubble);
+                messagesEl.appendChild(wrapper);
+            }
+
+            // Typing indicator
+            if (isStreaming && messages.length > 0 && messages[messages.length - 1].content === '') {
+                const dots = document.createElement('div');
+                dots.className = 'typing-dots flex justify-start mb-4';
+                dots.innerHTML = `
+                    <div class="bg-white border border-gray-200 rounded-2xl rounded-bl-md px-4 py-3">
+                        <div class="flex space-x-1">
+                            <div class="w-2 h-2 bg-gray-400 rounded-full dot-1"></div>
+                            <div class="w-2 h-2 bg-gray-400 rounded-full dot-2"></div>
+                            <div class="w-2 h-2 bg-gray-400 rounded-full dot-3"></div>
+                        </div>
+                    </div>`;
+                messagesEl.appendChild(dots);
+            }
+
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        function updateUI() {
+            if (isStreaming) {
+                sendBtn.classList.add('hidden');
+                stopBtn.classList.remove('hidden');
+                chatInput.disabled = true;
+            } else {
+                sendBtn.classList.remove('hidden');
+                stopBtn.classList.add('hidden');
+                chatInput.disabled = false;
+                chatInput.focus();
+            }
+            sendBtn.disabled = !chatInput.value.trim();
+        }
+
+        // ── Chat ──
+        async function sendMessage(content) {
+            if (isStreaming) return;
+            errorBanner.classList.add('hidden');
+
+            const userMsg = { id: crypto.randomUUID(), role: 'user', content, timestamp: Date.now() };
+            const assistantMsg = { id: crypto.randomUUID(), role: 'assistant', content: '', timestamp: Date.now() };
+
+            messages.push(userMsg, assistantMsg);
+            isStreaming = true;
+            renderMessages();
+            updateUI();
+
+            abortController = new AbortController();
+
+            try {
+                // Send all messages except the empty assistant placeholder
+                const apiMessages = messages.slice(0, -1).map(m => ({
+                    id: m.id, role: m.role, content: m.content, timestamp: m.timestamp
+                }));
+
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ messages: apiMessages, sourceText, topic }),
+                    signal: abortController.signal,
+                });
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.detail || 'Failed to send message');
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let assistantContent = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split('\n\n').filter(Boolean);
+
+                    for (const line of lines) {
+                        if (!line.startsWith('data: ')) continue;
+                        try {
+                            const json = JSON.parse(line.slice(6));
+                            if (json.type === 'delta') {
+                                assistantContent += json.text;
+                                messages[messages.length - 1].content = assistantContent;
+                                renderMessages();
+                            } else if (json.type === 'error') {
+                                throw new Error(json.error);
+                            }
+                        } catch (e) {
+                            if (e instanceof SyntaxError) continue;
+                            throw e;
+                        }
+                    }
+                }
+
+                // Auto-speak completed response
+                if (autoSpeak && assistantContent && 'speechSynthesis' in window) {
+                    speakText(assistantContent);
+                }
+            } catch (e) {
+                if (e.name === 'AbortError') return;
+                errorBanner.textContent = e.message || 'An error occurred';
+                errorBanner.classList.remove('hidden');
+                messages.pop(); // Remove empty assistant message
+            } finally {
+                isStreaming = false;
+                abortController = null;
+                renderMessages();
+                updateUI();
+            }
+        }
+
+        // ── Events ──
+        chatForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const text = chatInput.value.trim();
+            if (!text || isStreaming) return;
+            chatInput.value = '';
+            sendBtn.disabled = true;
+            sendMessage(text);
+        });
+
+        chatInput.addEventListener('input', () => {
+            sendBtn.disabled = !chatInput.value.trim();
+        });
+
+        stopBtn.addEventListener('click', () => abortController?.abort());
+
+        // ── Voice Recognition ──
+        voiceBtn.addEventListener('click', () => {
+            if (isListening) { recognition?.stop(); return; }
+
+            const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+            recognition = new SR();
+            recognition.continuous = false;
+            recognition.interimResults = true;
+            recognition.lang = 'en-US';
+
+            recognition.onresult = (event) => {
+                let finalTranscript = '';
+                let interimTranscript = '';
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    if (event.results[i].isFinal) {
+                        finalTranscript += event.results[i][0].transcript;
+                    } else {
+                        interimTranscript += event.results[i][0].transcript;
+                    }
+                }
+                chatInput.value = finalTranscript || interimTranscript;
+                if (finalTranscript) {
+                    sendMessage(finalTranscript.trim());
+                    chatInput.value = '';
+                }
+            };
+
+            const stopVoice = () => {
+                isListening = false;
+                voiceBtn.classList.remove('bg-red-100', 'text-red-600', 'animate-pulse');
+                voiceBtn.classList.add('text-gray-400', 'hover:text-gray-600', 'hover:bg-gray-100');
+                chatInput.placeholder = 'Type your message...';
+                chatInput.disabled = isStreaming;
+            };
+            recognition.onend = stopVoice;
+            recognition.onerror = stopVoice;
+
+            recognition.start();
+            isListening = true;
+            voiceBtn.classList.add('bg-red-100', 'text-red-600', 'animate-pulse');
+            voiceBtn.classList.remove('text-gray-400', 'hover:text-gray-600', 'hover:bg-gray-100');
+            chatInput.placeholder = 'Listening...';
+            chatInput.disabled = true;
+        });
+
+        // ── Text-to-Speech ──
+        const TTS_OFF = 'M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2';
+        const TTS_ON = 'M15.536 8.464a5 5 0 010 7.072M17.95 6.05a8 8 0 010 11.9M6.5 8.8l4.2-3.15A.5.5 0 0111.5 6v12a.5.5 0 01-.8.4L6.5 15.2H4a1 1 0 01-1-1v-4.4a1 1 0 011-1h2.5z';
+
+        ttsBtn.addEventListener('click', () => {
+            autoSpeak = !autoSpeak;
+            if (autoSpeak) {
+                ttsBtn.classList.add('bg-blue-100', 'text-blue-600');
+                ttsBtn.classList.remove('text-gray-400', 'hover:text-gray-600', 'hover:bg-gray-100');
+                ttsIconPath.setAttribute('d', TTS_ON);
+                ttsBtn.title = 'Disable auto-read';
+            } else {
+                ttsBtn.classList.remove('bg-blue-100', 'text-blue-600');
+                ttsBtn.classList.add('text-gray-400', 'hover:text-gray-600', 'hover:bg-gray-100');
+                ttsIconPath.setAttribute('d', TTS_OFF);
+                ttsBtn.title = 'Enable auto-read responses';
+            }
+        });
+
+        ttsStopBtn.addEventListener('click', () => {
+            speechSynthesis.cancel();
+            ttsStopBtn.classList.add('hidden');
+        });
+
+        function speakText(text) {
+            speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.rate = 1.0;
+            utterance.pitch = 1.0;
+            const voices = speechSynthesis.getVoices();
+            const english = voices.find(v => v.lang.startsWith('en') && v.localService);
+            if (english) utterance.voice = english;
+            utterance.onstart = () => ttsStopBtn.classList.remove('hidden');
+            utterance.onend = () => ttsStopBtn.classList.add('hidden');
+            utterance.onerror = () => ttsStopBtn.classList.add('hidden');
+            speechSynthesis.speak(utterance);
+        }
+
+        // ── Init ──
+        function init() {
+            const stored = sessionStorage.getItem('ai-teacher-session');
+            if (!stored) { window.location.href = '/'; return; }
+
+            try {
+                const session = JSON.parse(stored);
+                sessionStorage.removeItem('ai-teacher-session');
+                topic = session.topic || null;
+                sourceText = session.sourceText || null;
+
+                if (topic) {
+                    topicBadge.textContent = `\u2014 ${topic}`;
+                    topicBadge.classList.remove('hidden');
+                }
+
+                let initialMessage;
+                if (sourceText) {
+                    initialMessage = topic
+                        ? `I've uploaded a document and I'd like to learn about: ${topic}`
+                        : "I've uploaded a document. Please help me understand it.";
+                } else {
+                    initialMessage = `I'd like to learn about: ${topic}`;
+                }
+                setTimeout(() => sendMessage(initialMessage), 100);
+            } catch {
+                window.location.href = '/';
+            }
+
+            // Feature detection
+            if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
+                voiceBtn.classList.remove('hidden');
+            }
+            if ('speechSynthesis' in window) {
+                ttsBtn.classList.remove('hidden');
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>

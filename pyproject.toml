@@ -1,0 +1,21 @@
+[project]
+name = "ai-teacher"
+version = "0.1.0"
+description = "An interactive Socratic learning assistant powered by Claude AI"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi[standard]>=0.115.0",
+    "uvicorn>=0.34.0",
+    "anthropic>=0.42.0",
+    "python-multipart>=0.0.18",
+    "pymupdf>=1.25.0",
+    "python-docx>=1.1.0",
+    "python-dotenv>=1.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_teacher"]
